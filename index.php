@@ -847,33 +847,69 @@
       window.qrTimer = setTimeout(triggerUpdate, 450);
     });
 
-    // Download do QR Code
+    // Download do QR Code (compatível tanto com GD no XAMPP quanto com SVG na Vercel convertendo para JPG/PNG)
+    async function convertSvgOrImgToRaster(sourceImgUrl, format) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const size = 1200; // Alta resolução gráfica
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          
+          // Fundo branco sólido (essencial para JPG)
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, size, size);
+          ctx.drawImage(img, 0, 0, size, size);
+          
+          const mime = format === 'png' ? 'image/png' : 'image/jpeg';
+          canvas.toBlob(blob => {
+            if (blob) resolve(blob);
+            else reject(new Error('Erro no canvas'));
+          }, mime, 0.95);
+        };
+        img.onerror = () => reject(new Error('Erro ao carregar imagem'));
+        img.src = sourceImgUrl;
+      });
+    }
+
     btnDownload.addEventListener('click', async () => {
       const url = inputUrl.value.trim() || 'https://www.google.com.br/';
       showToast(`Baixando QR Code em ${currentFormat.toUpperCase()}...`);
 
-      if (currentLogoBase64) {
-        const formData = new FormData();
-        formData.append('url', url);
-        formData.append('format', currentFormat);
-        formData.append('download', '1');
-        formData.append('logo_base64', currentLogoBase64);
-
-        try {
+      try {
+        let blob;
+        if (currentLogoBase64) {
+          const formData = new FormData();
+          formData.append('url', url);
+          formData.append('format', currentFormat);
+          formData.append('logo_base64', currentLogoBase64);
           const res = await fetch('generate.php', { method: 'POST', body: formData });
-          const blob = await res.blob();
-          const downloadUrl = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = downloadUrl;
-          a.download = `qrcode.${currentFormat}`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          window.URL.revokeObjectURL(downloadUrl);
-        } catch (err) {
-          showToast('Erro ao baixar QR Code');
+          blob = await res.blob();
+        } else {
+          const res = await fetch(`generate.php?format=${currentFormat}&url=${encodeURIComponent(url)}&t=${Date.now()}`);
+          blob = await res.blob();
         }
-      } else {
+
+        // Se o servidor retornou SVG (caso da Vercel sem GD), converte para JPG/PNG em altíssima definição no cliente
+        if (blob.type.includes('svg')) {
+          const svgUrl = URL.createObjectURL(blob);
+          blob = await convertSvgOrImgToRaster(svgUrl, currentFormat);
+          URL.revokeObjectURL(svgUrl);
+        }
+
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = `qrcode.${currentFormat}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(downloadUrl);
+      } catch (err) {
+        // Fallback direto
         window.location.href = `generate.php?format=${currentFormat}&url=${encodeURIComponent(url)}&download=1`;
       }
     });
